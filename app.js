@@ -185,10 +185,13 @@ async function submitAction() {
   }
 
   try {
+    // Use text/plain to avoid CORS preflight (OPTIONS) which Apps Script doesn't handle.
+    // Apps Script still receives the JSON body correctly via e.postData.contents.
     var response = await fetch(API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body),
+      redirect: 'follow'
     });
     var data = await response.json();
 
