@@ -2,6 +2,11 @@
  * SAL Scanner PWA
  * MEL Tour 2026
  *
+ * Modes:
+ *   Single - Scan/lookup one item at a time, dispatch or return.
+ *   Batch  - Select a team, load all items, tick & adjust quantities,
+ *            submit as one batch (dispatch or return).
+ *
  * IMPORTANT: Replace API_URL below with your
  * Apps Script Web App URL after deployment.
  *
@@ -14,11 +19,18 @@
 
 var API_URL = 'https://script.google.com/macros/s/AKfycbxlWE579RTmQnzcI0pl1WjIiX6YbiK1a4MxYdPRQrRwg7dPgKTzHRImGpAu0tKJBbRlLQ/exec';
 
-var html5QrCode = null;
-var currentItem = null;
-var currentAction = 'dispatch';
+// --- STATE ---
+var html5QrCode = null;       // Single-mode scanner
+var batchQrCode = null;       // Batch-mode scanner
+var currentItem = null;        // Currently displayed item (single mode)
+var currentAction = 'dispatch'; // Single mode action
+var currentMode = 'single';    // 'single' or 'batch'
+var batchAction = 'dispatch';  // 'dispatch' or 'return'
+var batchItemsData = [];       // Items loaded from API for batch mode
+var batchScanning = false;     // Whether batch scanner is active
+var areasLoaded = false;       // Whether area dropdown has been populated
 
-// --- SCANNER ---
+// ==================== SCANNER ====================
 
 function initScanner() {
   html5QrCode = new Html5Qrcode("reader");
@@ -34,6 +46,7 @@ function initScanner() {
 }
 
 function onScanSuccess(decodedText) {
+  // SAL-XXX format (e.g. SAL-001, SAL-042, SAL-123)
   if (!/^SAL-\d{3,}$/.test(decodedText)) {
     showToast('Invalid QR code: ' + decodedText, 'error');
     return;
@@ -43,7 +56,7 @@ function onScanSuccess(decodedText) {
   lookupItem(decodedText);
 }
 
-// --- API CALLS ---
+// ==================== API: LOOKUP ====================
 
 async function lookupItem(salId) {
   var detailsEl = document.getElementById('item-details');
@@ -124,7 +137,7 @@ function detail(label, value) {
          '</span><span class="value">' + value + '</span></div>';
 }
 
-// --- ACTION SELECTION ---
+// ==================== SINGLE MODE: ACTION ====================
 
 function selectAction(action) {
   currentAction = action;
@@ -155,7 +168,7 @@ function selectAction(action) {
   }
 }
 
-// --- SUBMIT ---
+// ==================== SINGLE MODE: SUBMIT ====================
 
 async function submitAction() {
   var name = document.getElementById('f-name').value.trim();
@@ -212,22 +225,39 @@ async function submitAction() {
   }
 }
 
-// --- MANUAL ENTRY ---
+// ==================== MANUAL ENTRY ====================
 
 function manualLookup() {
   var input = document.getElementById('manual-id');
-  var id = input.value.trim().toUpperCase();
-  if (/^\d+$/.test(id)) id = 'SAL-' + id.padStart(3, '0');
-  if (!/^SAL-\d{3,}$/.test(id)) {
-    showToast('Invalid format. Use SAL-001 or just the number.', 'error');
+  var raw = input.value.trim().toUpperCase();
+
+  // Accept: "SAL-001", "SAL001", "001", "1" → normalise to SAL-NNN
+  var cleaned = raw.replace(/[\s-]/g, '');
+  var id = '';
+
+  // If starts with SAL, strip prefix and parse number
+  var salMatch = cleaned.match(/^SAL(\d+)$/);
+  if (salMatch) {
+    id = 'SAL-' + salMatch[1].padStart(3, '0');
+  } else {
+    // Try bare number
+    var numMatch = cleaned.match(/^(\d+)$/);
+    if (numMatch) {
+      id = 'SAL-' + numMatch[1].padStart(3, '0');
+    }
+  }
+
+  if (!id || !/^SAL-\d{3,}$/.test(id)) {
+    showToast('Enter a number (e.g. 42) or SAL-042', 'error');
     return;
   }
+
   if (html5QrCode) { try { html5QrCode.pause(); } catch(e) {} }
   input.value = id;
   lookupItem(id);
 }
 
-// --- UI HELPERS ---
+// ==================== SCANNER RESET ====================
 
 function resetScanner() {
   currentItem = null;
@@ -243,6 +273,399 @@ function resetScanner() {
   }
 }
 
+// ==================== MODE SWITCHING ====================
+
+function switchMode(mode) {
+  currentMode = mode;
+  var singleMode = document.getElementById('single-mode');
+  var batchMode = document.getElementById('batch-mode');
+  var btnSingle = document.getElementById('mode-single');
+  var btnBatch = document.getElementById('mode-batch');
+
+  // Hide single-item panels
+  document.getElementById('item-details').style.display = 'none';
+  document.getElementById('action-form').style.display = 'none';
+
+  if (mode === 'single') {
+    singleMode.style.display = 'block';
+    batchMode.style.display = 'none';
+    btnSingle.className = 'mode-btn active';
+    btnBatch.className = 'mode-btn';
+    // Stop batch scanner if running
+    stopBatchScanner();
+    // Resume single scanner
+    if (html5QrCode) { try { html5QrCode.resume(); } catch(e) {} }
+  } else {
+    singleMode.style.display = 'none';
+    batchMode.style.display = 'block';
+    btnSingle.className = 'mode-btn';
+    btnBatch.className = 'mode-btn active';
+    // Pause single scanner
+    if (html5QrCode) { try { html5QrCode.pause(); } catch(e) {} }
+    // Load area dropdown if not done
+    if (!areasLoaded) loadAreaDropdown();
+    // Restore saved name
+    var savedName = localStorage.getItem('sal-operator-name');
+    if (savedName) document.getElementById('batch-name').value = savedName;
+  }
+}
+
+// ==================== BATCH MODE ====================
+
+function setBatchAction(action) {
+  batchAction = action;
+  var tabDispatch = document.getElementById('batch-tab-dispatch');
+  var tabReturn = document.getElementById('batch-tab-return');
+  var btnSubmit = document.getElementById('btn-batch-submit');
+  var countBadge = document.getElementById('batch-selected-count');
+
+  tabDispatch.className = 'action-tab' + (action === 'dispatch' ? ' active-dispatch' : '');
+  tabReturn.className = 'action-tab' + (action === 'return' ? ' active-return' : '');
+
+  if (action === 'dispatch') {
+    btnSubmit.textContent = 'Dispatch Selected Items';
+    btnSubmit.className = 'btn btn-dispatch';
+    countBadge.className = 'batch-count';
+  } else {
+    btnSubmit.textContent = 'Return Selected Items';
+    btnSubmit.className = 'btn btn-return';
+    countBadge.className = 'batch-count return-count';
+  }
+
+  // Reload items if area is selected (different data view for dispatch vs return)
+  var area = document.getElementById('batch-area').value;
+  if (area) loadBatchItems();
+}
+
+async function loadAreaDropdown() {
+  var select = document.getElementById('batch-area');
+  try {
+    var response = await fetch(API_URL + '?action=areas');
+    var data = await response.json();
+    if (data.areas) {
+      for (var i = 0; i < data.areas.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = data.areas[i];
+        opt.textContent = data.areas[i];
+        select.appendChild(opt);
+      }
+      areasLoaded = true;
+    }
+  } catch (err) {
+    showToast('Failed to load areas', 'error');
+  }
+}
+
+async function loadBatchItems() {
+  var area = document.getElementById('batch-area').value;
+  var section = document.getElementById('batch-items-section');
+  var listDiv = document.getElementById('batch-items-list');
+
+  if (!area) {
+    section.style.display = 'none';
+    batchItemsData = [];
+    return;
+  }
+
+  listDiv.innerHTML = '<div class="loading">Loading items...</div>';
+  section.style.display = 'block';
+
+  try {
+    var response = await fetch(
+      API_URL + '?action=areaItems&area=' + encodeURIComponent(area));
+    var data = await response.json();
+
+    if (!data.items || data.items.length === 0) {
+      listDiv.innerHTML = '<p style="color:#666;text-align:center">No items found for this area.</p>';
+      batchItemsData = [];
+      updateSelectedCount();
+      return;
+    }
+
+    // Filter items based on action (dispatch: show items with remaining qty, return: show outstanding)
+    batchItemsData = [];
+    for (var i = 0; i < data.items.length; i++) {
+      var it = data.items[i];
+      if (batchAction === 'dispatch') {
+        // Show items that still need dispatching
+        if (it.remainingToDispatch > 0) {
+          batchItemsData.push({
+            salId: it.salId,
+            item: it.item,
+            purpose: it.purpose || '',
+            requiredQty: it.requiredQty,
+            dispatched: it.dispatched,
+            remaining: it.remainingToDispatch,
+            outstanding: it.outstanding,
+            returned: it.returned,
+            defaultQty: it.remainingToDispatch,
+            checked: false,
+            qty: it.remainingToDispatch,
+            damagedQty: 0
+          });
+        }
+      } else {
+        // Show items that are outstanding (dispatched but not returned)
+        if (it.outstanding > 0) {
+          batchItemsData.push({
+            salId: it.salId,
+            item: it.item,
+            purpose: it.purpose || '',
+            requiredQty: it.requiredQty,
+            dispatched: it.dispatched,
+            outstanding: it.outstanding,
+            returned: it.returned,
+            defaultQty: it.outstanding,
+            checked: false,
+            qty: it.outstanding,
+            damagedQty: 0
+          });
+        }
+      }
+    }
+
+    renderBatchItems();
+  } catch (err) {
+    showToast('Failed to load items: ' + err.message, 'error');
+    listDiv.innerHTML = '';
+    batchItemsData = [];
+  }
+}
+
+function renderBatchItems() {
+  var listDiv = document.getElementById('batch-items-list');
+
+  if (batchItemsData.length === 0) {
+    var msg = batchAction === 'dispatch'
+      ? 'All items fully dispatched!'
+      : 'No outstanding items to return.';
+    listDiv.innerHTML = '<p style="color:#1e8e3e;text-align:center;font-weight:600">' + msg + '</p>';
+    updateSelectedCount();
+    return;
+  }
+
+  var html = '';
+
+  // Column headers for qty inputs
+  if (batchAction === 'return') {
+    html += '<div class="qty-headers"><span>Qty</span><span>Dmg</span></div>';
+  }
+
+  for (var i = 0; i < batchItemsData.length; i++) {
+    var it = batchItemsData[i];
+    var meta = it.salId;
+
+    if (batchAction === 'dispatch') {
+      meta += ' | Req: ' + it.requiredQty + ' | Sent: ' + it.dispatched;
+    } else {
+      meta += ' | Sent: ' + it.dispatched + ' | Out: ' + it.outstanding;
+    }
+
+    var checkedAttr = it.checked ? ' checked' : '';
+    var maxQty = batchAction === 'dispatch' ? it.remaining : it.outstanding;
+
+    html += '<div class="batch-item" data-index="' + i + '">' +
+      '<input type="checkbox" class="batch-check"' + checkedAttr +
+        ' onchange="onBatchCheck(' + i + ', this.checked)">' +
+      '<div class="batch-item-info">' +
+        '<div class="item-name">' + it.item + '</div>' +
+        '<div class="item-meta">' + meta + '</div>' +
+      '</div>' +
+      '<div class="qty-inputs">' +
+        '<input type="number" class="qty-input" value="' + it.qty + '"' +
+          ' min="1" max="' + maxQty + '"' +
+          ' onchange="onBatchQtyChange(' + i + ', this.value)">' +
+        (batchAction === 'return'
+          ? '<input type="number" class="dmg-input" value="' + it.damagedQty + '"' +
+            ' min="0" max="' + it.qty + '"' +
+            ' onchange="onBatchDmgChange(' + i + ', this.value)">'
+          : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  listDiv.innerHTML = html;
+  updateSelectedCount();
+}
+
+function onBatchCheck(index, checked) {
+  batchItemsData[index].checked = checked;
+  updateSelectedCount();
+}
+
+function onBatchQtyChange(index, value) {
+  batchItemsData[index].qty = Math.max(1, parseInt(value) || 1);
+}
+
+function onBatchDmgChange(index, value) {
+  batchItemsData[index].damagedQty = Math.max(0, parseInt(value) || 0);
+}
+
+function toggleSelectAll() {
+  var selectAll = document.getElementById('batch-select-all').checked;
+  var checkboxes = document.querySelectorAll('.batch-check');
+
+  for (var i = 0; i < batchItemsData.length; i++) {
+    batchItemsData[i].checked = selectAll;
+  }
+  for (var j = 0; j < checkboxes.length; j++) {
+    checkboxes[j].checked = selectAll;
+  }
+  updateSelectedCount();
+}
+
+function updateSelectedCount() {
+  var count = 0;
+  for (var i = 0; i < batchItemsData.length; i++) {
+    if (batchItemsData[i].checked) count++;
+  }
+  document.getElementById('batch-selected-count').textContent = count;
+}
+
+// ==================== BATCH SCANNER ====================
+
+function toggleBatchScanner() {
+  if (batchScanning) {
+    stopBatchScanner();
+  } else {
+    startBatchScanner();
+  }
+}
+
+function startBatchScanner() {
+  var container = document.getElementById('batch-scanner-container');
+  container.style.display = 'block';
+  batchScanning = true;
+
+  batchQrCode = new Html5Qrcode("batch-reader");
+  batchQrCode.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: { width: 200, height: 200 }, aspectRatio: 1.5 },
+    onBatchScanSuccess,
+    function() {}
+  ).catch(function(err) {
+    console.error('Batch scanner failed:', err);
+    showToast('Camera access denied', 'error');
+    batchScanning = false;
+    container.style.display = 'none';
+  });
+}
+
+function stopBatchScanner() {
+  batchScanning = false;
+  document.getElementById('batch-scanner-container').style.display = 'none';
+  if (batchQrCode) {
+    try { batchQrCode.stop(); } catch(e) {}
+    batchQrCode = null;
+  }
+}
+
+function onBatchScanSuccess(decodedText) {
+  if (!/^SAL-\d{3,}$/.test(decodedText)) {
+    showToast('Invalid QR: ' + decodedText, 'error');
+    return;
+  }
+
+  if (navigator.vibrate) navigator.vibrate(200);
+
+  // Find item in batch list and check it
+  var found = false;
+  for (var i = 0; i < batchItemsData.length; i++) {
+    if (batchItemsData[i].salId === decodedText) {
+      if (batchItemsData[i].checked) {
+        showToast(decodedText + ' already selected', 'error');
+      } else {
+        batchItemsData[i].checked = true;
+        // Update checkbox in DOM
+        var checkboxes = document.querySelectorAll('.batch-check');
+        if (checkboxes[i]) checkboxes[i].checked = true;
+        updateSelectedCount();
+        showToast(decodedText + ' added', 'success');
+      }
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    showToast(decodedText + ' not in this area\'s list', 'error');
+  }
+}
+
+// ==================== BATCH SUBMIT ====================
+
+async function submitBatch() {
+  var name = document.getElementById('batch-name').value.trim();
+  var notes = document.getElementById('batch-notes').value.trim();
+
+  if (!name) {
+    showToast('Please enter your name', 'error');
+    return;
+  }
+
+  localStorage.setItem('sal-operator-name', name);
+
+  // Collect checked items
+  var selectedItems = [];
+  for (var i = 0; i < batchItemsData.length; i++) {
+    if (batchItemsData[i].checked && batchItemsData[i].qty > 0) {
+      var entry = {
+        salId: batchItemsData[i].salId,
+        quantity: batchItemsData[i].qty
+      };
+      if (batchAction === 'return') {
+        entry.damagedQty = batchItemsData[i].damagedQty;
+      }
+      selectedItems.push(entry);
+    }
+  }
+
+  if (selectedItems.length === 0) {
+    showToast('No items selected', 'error');
+    return;
+  }
+
+  var btn = document.getElementById('btn-batch-submit');
+  btn.disabled = true;
+  btn.textContent = 'Processing ' + selectedItems.length + ' items...';
+
+  var postAction = batchAction === 'dispatch' ? 'bulkDispatch' : 'bulkReturn';
+
+  try {
+    var response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: postAction,
+        operatorName: name,
+        notes: notes,
+        items: selectedItems
+      }),
+      redirect: 'follow'
+    });
+    var data = await response.json();
+
+    if (data.error) {
+      showToast(data.error, 'error');
+    } else {
+      showToast(data.message + ' | Form: ' + data.formNumber, 'success');
+      if (data.pdfUrl) {
+        setTimeout(function() { window.open(data.pdfUrl, '_blank'); }, 1000);
+      }
+      // Reload items to show updated quantities
+      loadBatchItems();
+    }
+  } catch (err) {
+    showToast('Network error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = batchAction === 'dispatch'
+      ? 'Dispatch Selected Items' : 'Return Selected Items';
+  }
+}
+
+// ==================== UI HELPERS ====================
+
 function showToast(message, type) {
   var toast = document.getElementById('toast');
   toast.textContent = message;
@@ -251,6 +674,6 @@ function showToast(message, type) {
   setTimeout(function() { toast.style.display = 'none'; }, 4000);
 }
 
-// --- INIT ---
+// ==================== INIT ====================
 
 document.addEventListener('DOMContentLoaded', initScanner);

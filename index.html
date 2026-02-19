@@ -57,15 +57,17 @@
     .btn-dispatch { background: #1a73e8; color: white; }
     .btn-return { background: #34a853; color: white; }
     .btn-scan { background: #ea4335; color: white; }
+    .btn-secondary { background: #e8eaed; color: #333; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .form-group { margin-bottom: 12px; }
     .form-group label {
       display: block; font-size: 13px; color: #666; margin-bottom: 4px;
     }
-    .form-group input, .form-group select {
+    .form-group input, .form-group select, .form-group textarea {
       width: 100%; padding: 10px; border: 1px solid #ddd;
       border-radius: 8px; font-size: 16px; background: white;
     }
+    .form-group textarea { resize: vertical; min-height: 44px; }
     .manual-entry { display: flex; gap: 8px; margin: 12px; }
     .manual-entry input {
       flex: 1; padding: 10px; border: 1px solid #ddd;
@@ -95,6 +97,80 @@
     }
     .action-tab.active-dispatch { border-color: #1a73e8; background: #e8f0fe; color: #1a73e8; }
     .action-tab.active-return { border-color: #34a853; background: #e6f4ea; color: #34a853; }
+
+    /* Mode toggle (Single / Batch) */
+    .mode-toggle {
+      display: flex; gap: 4px; margin: 12px; background: white;
+      border-radius: 8px; padding: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .mode-btn {
+      flex: 1; padding: 10px; border: none; background: transparent;
+      border-radius: 6px; font-size: 14px; font-weight: 600;
+      cursor: pointer; text-align: center; color: #666;
+    }
+    .mode-btn.active { background: #1a73e8; color: white; }
+
+    /* Batch mode items */
+    .batch-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 0; border-bottom: 1px solid #eee;
+    }
+    .batch-item:last-child { border-bottom: none; }
+    .batch-item input[type="checkbox"] {
+      width: 20px; height: 20px; flex-shrink: 0;
+      accent-color: #1a73e8;
+    }
+    .batch-item-info { flex: 1; min-width: 0; }
+    .batch-item-info .item-name {
+      font-weight: 600; font-size: 14px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .batch-item-info .item-meta { font-size: 12px; color: #666; }
+    .batch-item .qty-inputs { display: flex; gap: 4px; flex-shrink: 0; }
+    .batch-item .qty-input {
+      width: 50px; padding: 6px; border: 1px solid #ddd;
+      border-radius: 6px; font-size: 14px; text-align: center;
+    }
+    .batch-item .dmg-input {
+      width: 44px; padding: 6px; border: 1px solid #ddd;
+      border-radius: 6px; font-size: 14px; text-align: center;
+      background: #fff5f5;
+    }
+
+    /* Select all row */
+    .select-all-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 0; border-bottom: 2px solid #eee; margin-bottom: 4px;
+    }
+    .select-all-row input[type="checkbox"] {
+      width: 20px; height: 20px; accent-color: #1a73e8;
+    }
+    .select-all-row span { font-size: 13px; font-weight: 600; color: #666; }
+
+    /* Batch scan-to-add button */
+    .batch-scan-btn {
+      display: flex; align-items: center; justify-content: center;
+      gap: 6px; padding: 10px; background: #fef7e0; color: #ea8600;
+      border: 1px dashed #ea8600; border-radius: 8px; cursor: pointer;
+      font-size: 14px; font-weight: 600; margin-top: 8px;
+    }
+
+    /* Item count badge */
+    .batch-count {
+      display: inline-block; background: #1a73e8; color: white;
+      font-size: 11px; font-weight: 600; padding: 2px 6px;
+      border-radius: 10px; margin-left: 4px; vertical-align: middle;
+    }
+    .batch-count.return-count { background: #34a853; }
+
+    /* Qty column headers */
+    .qty-headers {
+      display: flex; gap: 4px; justify-content: flex-end;
+      padding: 4px 0; font-size: 11px; color: #999;
+      text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .qty-headers span:first-child { width: 50px; text-align: center; }
+    .qty-headers span:last-child { width: 44px; text-align: center; }
   </style>
 </head>
 <body>
@@ -103,16 +179,27 @@
     <small>MEL Tour 2026</small>
   </div>
 
-  <div id="scanner-container">
-    <div id="reader"></div>
+  <div class="mode-toggle">
+    <button class="mode-btn active" id="mode-single"
+            onclick="switchMode('single')">Single</button>
+    <button class="mode-btn" id="mode-batch"
+            onclick="switchMode('batch')">Batch</button>
   </div>
 
-  <div class="manual-entry">
-    <input type="text" id="manual-id" placeholder="SAL-001 or just 1"
-           onkeydown="if(event.key==='Enter')manualLookup()">
-    <button onclick="manualLookup()">Lookup</button>
+  <!-- ==================== SINGLE MODE ==================== -->
+  <div id="single-mode">
+    <div id="scanner-container">
+      <div id="reader"></div>
+    </div>
+
+    <div class="manual-entry">
+      <input type="text" id="manual-id" placeholder="SAL-001 or just 001"
+             onkeydown="if(event.key==='Enter')manualLookup()">
+      <button onclick="manualLookup()">Lookup</button>
+    </div>
   </div>
 
+  <!-- Single item details (shown after scan/lookup) -->
   <div id="item-details" class="section"></div>
 
   <div id="action-form" class="section">
@@ -144,6 +231,72 @@
     </button>
     <button class="btn btn-scan" onclick="resetScanner()"
             style="margin-top:12px">Scan Another Item</button>
+  </div>
+
+  <!-- ==================== BATCH MODE ==================== -->
+  <div id="batch-mode" style="display:none">
+
+    <!-- Batch action tabs (Dispatch / Return) -->
+    <div class="section" style="padding-bottom:8px">
+      <div class="action-tabs" style="margin-bottom:0">
+        <button class="action-tab active-dispatch" id="batch-tab-dispatch"
+                onclick="setBatchAction('dispatch')">Dispatch</button>
+        <button class="action-tab" id="batch-tab-return"
+                onclick="setBatchAction('return')">Return</button>
+      </div>
+    </div>
+
+    <!-- Batch setup: area + name -->
+    <div class="section">
+      <h3>Batch Setup</h3>
+      <div class="form-group">
+        <label>Team / Area</label>
+        <select id="batch-area" onchange="loadBatchItems()">
+          <option value="">-- Choose team --</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Your Name</label>
+        <input type="text" id="batch-name" placeholder="Enter your name">
+      </div>
+      <div class="form-group">
+        <label>Notes (optional)</label>
+        <input type="text" id="batch-notes" placeholder="Any notes for this batch...">
+      </div>
+    </div>
+
+    <!-- Batch items list -->
+    <div id="batch-items-section" class="section" style="display:none">
+      <h3>
+        <span id="batch-items-title">Items</span>
+        <span id="batch-selected-count" class="batch-count">0</span>
+      </h3>
+
+      <div class="select-all-row">
+        <input type="checkbox" id="batch-select-all"
+               onchange="toggleSelectAll()">
+        <span>Select All</span>
+      </div>
+
+      <div id="batch-items-list"></div>
+
+      <!-- Scan to add (opens scanner to tick items by scanning) -->
+      <div class="batch-scan-btn" id="batch-scan-toggle"
+           onclick="toggleBatchScanner()">
+        Scan QR to select items
+      </div>
+
+      <!-- Embedded scanner for batch scanning -->
+      <div id="batch-scanner-container" style="display:none; margin-top:8px">
+        <div id="batch-reader" style="width:100%; height:200px; background:#000"></div>
+        <button class="btn btn-secondary" onclick="toggleBatchScanner()"
+                style="margin-top:4px">Stop scanning</button>
+      </div>
+
+      <button class="btn" id="btn-batch-submit" onclick="submitBatch()">
+        Dispatch Selected Items
+      </button>
+    </div>
   </div>
 
   <div id="toast" class="toast"></div>
