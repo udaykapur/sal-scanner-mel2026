@@ -361,6 +361,7 @@ async function loadAreaDropdown() {
     var response = await fetch(API_URL + '?action=areas');
     var data = await response.json();
     if (data.areas) {
+      data.areas.sort();
       for (var i = 0; i < data.areas.length; i++) {
         var opt = document.createElement('option');
         opt.value = data.areas[i];
