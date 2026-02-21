@@ -107,7 +107,7 @@ function displayItem(item) {
   document.getElementById('item-details').innerHTML =
     '<h3>Item Details</h3>' +
     detail('SAL ID', '<strong>' + item.salId + '</strong>') +
-    detail('Area', item.area) +
+    detail('Team', item.area) +
     detail('Item', item.item) +
     detail('Purpose', item.purpose || '-') +
     detail('Required Qty', item.requiredQty) +
@@ -124,9 +124,19 @@ function displayItem(item) {
   // Default quantity: remaining to dispatch (min 1)
   document.getElementById('f-qty').value = Math.max(1, remaining);
 
-  // Restore saved operator name
-  var savedName = localStorage.getItem('sal-operator-name');
-  if (savedName) document.getElementById('f-name').value = savedName;
+  // Update dynamic team member label with area name
+  var teamLabel = document.getElementById('f-team-label');
+  if (item.area) {
+    teamLabel.textContent = item.area + ' Member Name';
+  } else {
+    teamLabel.textContent = 'Team Member Name';
+  }
+
+  // Restore saved names
+  var savedSalName = localStorage.getItem('sal-team-member');
+  if (savedSalName) document.getElementById('f-sal-name').value = savedSalName;
+  var savedTeamName = localStorage.getItem('sal-receiving-member');
+  if (savedTeamName) document.getElementById('f-team-name').value = savedTeamName;
 
   // Default to dispatch mode
   selectAction('dispatch');
@@ -171,16 +181,19 @@ function selectAction(action) {
 // ==================== SINGLE MODE: SUBMIT ====================
 
 async function submitAction() {
-  var name = document.getElementById('f-name').value.trim();
+  var salName = document.getElementById('f-sal-name').value.trim();
+  var teamName = document.getElementById('f-team-name').value.trim();
   var qty = parseInt(document.getElementById('f-qty').value);
   var notes = document.getElementById('f-notes').value.trim();
 
-  if (!name) { showToast('Please enter your name', 'error'); return; }
+  if (!salName) { showToast('Please enter SAL Team Member name', 'error'); return; }
+  if (!teamName) { showToast('Please enter Team Member name', 'error'); return; }
   if (!qty || qty < 1) { showToast('Enter a valid quantity', 'error'); return; }
   if (!currentItem) { showToast('No item selected', 'error'); return; }
 
-  // Save name for next scan
-  localStorage.setItem('sal-operator-name', name);
+  // Save names for next scan
+  localStorage.setItem('sal-team-member', salName);
+  localStorage.setItem('sal-receiving-member', teamName);
 
   var btnSubmit = document.getElementById('btn-submit');
   btnSubmit.disabled = true;
@@ -190,7 +203,8 @@ async function submitAction() {
     action: currentAction,
     salId: currentItem.salId,
     quantity: qty,
-    operatorName: name,
+    salTeamMember: salName,
+    teamMember: teamName,
     notes: notes
   };
   if (currentAction === 'return') {
@@ -268,6 +282,8 @@ function resetScanner() {
   document.getElementById('f-damaged').value = 0;
   document.getElementById('damaged-group').style.display = 'none';
   document.getElementById('manual-id').value = '';
+  // Reset dynamic team label
+  document.getElementById('f-team-label').textContent = 'Team Member Name';
   if (html5QrCode) {
     try { html5QrCode.resume(); } catch(e) { initScanner(); }
   }
@@ -304,9 +320,11 @@ function switchMode(mode) {
     if (html5QrCode) { try { html5QrCode.pause(); } catch(e) {} }
     // Load area dropdown if not done
     if (!areasLoaded) loadAreaDropdown();
-    // Restore saved name
-    var savedName = localStorage.getItem('sal-operator-name');
-    if (savedName) document.getElementById('batch-name').value = savedName;
+    // Restore saved names
+    var savedSalName = localStorage.getItem('sal-team-member');
+    if (savedSalName) document.getElementById('batch-sal-name').value = savedSalName;
+    var savedTeamName = localStorage.getItem('sal-receiving-member');
+    if (savedTeamName) document.getElementById('batch-team-name').value = savedTeamName;
   }
 }
 
@@ -364,8 +382,13 @@ async function loadBatchItems() {
   if (!area) {
     section.style.display = 'none';
     batchItemsData = [];
+    // Reset team label
+    document.getElementById('batch-team-label').textContent = 'Team Member Name';
     return;
   }
+
+  // Update dynamic team member label with area name
+  document.getElementById('batch-team-label').textContent = area + ' Member Name';
 
   listDiv.innerHTML = '<div class="loading">Loading items...</div>';
   section.style.display = 'block';
@@ -595,15 +618,21 @@ function onBatchScanSuccess(decodedText) {
 // ==================== BATCH SUBMIT ====================
 
 async function submitBatch() {
-  var name = document.getElementById('batch-name').value.trim();
+  var salName = document.getElementById('batch-sal-name').value.trim();
+  var teamName = document.getElementById('batch-team-name').value.trim();
   var notes = document.getElementById('batch-notes').value.trim();
 
-  if (!name) {
-    showToast('Please enter your name', 'error');
+  if (!salName) {
+    showToast('Please enter SAL Team Member name', 'error');
+    return;
+  }
+  if (!teamName) {
+    showToast('Please enter Team Member name', 'error');
     return;
   }
 
-  localStorage.setItem('sal-operator-name', name);
+  localStorage.setItem('sal-team-member', salName);
+  localStorage.setItem('sal-receiving-member', teamName);
 
   // Collect checked items
   var selectedItems = [];
@@ -637,7 +666,8 @@ async function submitBatch() {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
         action: postAction,
-        operatorName: name,
+        salTeamMember: salName,
+        teamMember: teamName,
         notes: notes,
         items: selectedItems
       }),

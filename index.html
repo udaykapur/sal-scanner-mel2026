@@ -211,8 +211,12 @@
               onclick="selectAction('return')">Return</button>
     </div>
     <div class="form-group">
-      <label>Your Name</label>
-      <input type="text" id="f-name" placeholder="Enter your name">
+      <label>SAL Team Member Name</label>
+      <input type="text" id="f-sal-name" placeholder="Your name (SAL team)">
+    </div>
+    <div class="form-group">
+      <label id="f-team-label">Team Member Name</label>
+      <input type="text" id="f-team-name" placeholder="Receiving/returning person">
     </div>
     <div class="form-group">
       <label>Quantity</label>
@@ -250,14 +254,18 @@
     <div class="section">
       <h3>Batch Setup</h3>
       <div class="form-group">
-        <label>Team / Area</label>
+        <label>Team</label>
         <select id="batch-area" onchange="loadBatchItems()">
           <option value="">-- Choose team --</option>
         </select>
       </div>
       <div class="form-group">
-        <label>Your Name</label>
-        <input type="text" id="batch-name" placeholder="Enter your name">
+        <label>SAL Team Member Name</label>
+        <input type="text" id="batch-sal-name" placeholder="Your name (SAL team)">
+      </div>
+      <div class="form-group">
+        <label id="batch-team-label">Team Member Name</label>
+        <input type="text" id="batch-team-name" placeholder="Receiving/returning person">
       </div>
       <div class="form-group">
         <label>Notes (optional)</label>
