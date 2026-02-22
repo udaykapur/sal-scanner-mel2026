@@ -17,7 +17,7 @@
  * 4. Copy the URL and paste it below
  ***********************/
 
-var API_URL = 'https://script.google.com/macros/s/AKfycbxlWE579RTmQnzcI0pl1WjIiX6YbiK1a4MxYdPRQrRwg7dPgKTzHRImGpAu0tKJBbRlLQ/exec';
+var API_URL = 'https://script.google.com/macros/s/AKfycbz32wILXpjtk61orzZLIT6eCBMWwp_UXjVsAWcGBtCV2jMaChcNIRPxW8LdN0wx2vBITA/exec';
 
 // --- STATE ---
 var html5QrCode = null;       // Single-mode scanner
