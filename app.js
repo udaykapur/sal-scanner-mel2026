@@ -3,9 +3,11 @@
  * MEL Tour 2026
  *
  * Modes:
- *   Single - Scan/lookup one item at a time, dispatch or return.
- *   Batch  - Select a team, load all items, tick & adjust quantities,
- *            submit as one batch (dispatch or return).
+ *   Single      - Scan/lookup one item at a time, dispatch or return.
+ *   Batch       - Select a team, load all items, tick & adjust quantities,
+ *                 submit as one batch (dispatch or return).
+ *   Form Upload - Scan a form QR code, take photos of the signed form,
+ *                 upload to Drive. Auto-detects form QR codes from any mode.
  *
  * IMPORTANT: Replace API_URL below with your
  * Apps Script Web App URL after deployment.
@@ -24,11 +26,14 @@ var html5QrCode = null;       // Single-mode scanner
 var batchQrCode = null;       // Batch-mode scanner
 var currentItem = null;        // Currently displayed item (single mode)
 var currentAction = 'dispatch'; // Single mode action
-var currentMode = 'single';    // 'single' or 'batch'
+var currentMode = 'single';    // 'single', 'batch', or 'upload'
 var batchAction = 'dispatch';  // 'dispatch' or 'return'
 var batchItemsData = [];       // Items loaded from API for batch mode
 var batchScanning = false;     // Whether batch scanner is active
 var areasLoaded = false;       // Whether area dropdown has been populated
+var uploadQrCode = null;       // Upload-mode scanner
+var uploadPhotos = [];         // Base64 images pending upload
+var currentFormData = null;    // Form details from lookup
 
 // ==================== SCANNER ====================
 
@@ -46,6 +51,15 @@ function initScanner() {
 }
 
 function onScanSuccess(decodedText) {
+  // Auto-detect form number QR codes (DF-, RF-, BDF-, BRF- prefixes)
+  if (/^[BD]?[DR]F-/.test(decodedText)) {
+    html5QrCode.pause();
+    if (navigator.vibrate) navigator.vibrate(200);
+    switchMode('upload');
+    lookupForm(decodedText);
+    return;
+  }
+
   // SAL-XXX format (e.g. SAL-001, SAL-042, SAL-123)
   if (!/^SAL-\d{3,}$/.test(decodedText)) {
     showToast('Invalid QR code: ' + decodedText, 'error');
@@ -295,36 +309,44 @@ function switchMode(mode) {
   currentMode = mode;
   var singleMode = document.getElementById('single-mode');
   var batchMode = document.getElementById('batch-mode');
+  var uploadMode = document.getElementById('upload-mode');
   var btnSingle = document.getElementById('mode-single');
   var btnBatch = document.getElementById('mode-batch');
+  var btnUpload = document.getElementById('mode-upload');
 
   // Hide single-item panels
   document.getElementById('item-details').style.display = 'none';
   document.getElementById('action-form').style.display = 'none';
 
+  // Hide all modes
+  singleMode.style.display = 'none';
+  batchMode.style.display = 'none';
+  uploadMode.style.display = 'none';
+  btnSingle.className = 'mode-btn';
+  btnBatch.className = 'mode-btn';
+  btnUpload.className = 'mode-btn';
+
+  // Stop all scanners
+  stopBatchScanner();
+  stopUploadScanner();
+  if (html5QrCode) { try { html5QrCode.pause(); } catch(e) {} }
+
   if (mode === 'single') {
     singleMode.style.display = 'block';
-    batchMode.style.display = 'none';
     btnSingle.className = 'mode-btn active';
-    btnBatch.className = 'mode-btn';
-    // Stop batch scanner if running
-    stopBatchScanner();
-    // Resume single scanner
     if (html5QrCode) { try { html5QrCode.resume(); } catch(e) {} }
-  } else {
-    singleMode.style.display = 'none';
+  } else if (mode === 'batch') {
     batchMode.style.display = 'block';
-    btnSingle.className = 'mode-btn';
     btnBatch.className = 'mode-btn active';
-    // Pause single scanner
-    if (html5QrCode) { try { html5QrCode.pause(); } catch(e) {} }
-    // Load area dropdown if not done
     if (!areasLoaded) loadAreaDropdown();
-    // Restore saved names
     var savedSalName = localStorage.getItem('sal-team-member');
     if (savedSalName) document.getElementById('batch-sal-name').value = savedSalName;
     var savedTeamName = localStorage.getItem('sal-receiving-member');
     if (savedTeamName) document.getElementById('batch-team-name').value = savedTeamName;
+  } else if (mode === 'upload') {
+    uploadMode.style.display = 'block';
+    btnUpload.className = 'mode-btn active';
+    initUploadScanner();
   }
 }
 
@@ -585,6 +607,15 @@ function stopBatchScanner() {
 }
 
 function onBatchScanSuccess(decodedText) {
+  // Auto-detect form number QR codes
+  if (/^[BD]?[DR]F-/.test(decodedText)) {
+    if (navigator.vibrate) navigator.vibrate(200);
+    stopBatchScanner();
+    switchMode('upload');
+    lookupForm(decodedText);
+    return;
+  }
+
   if (!/^SAL-\d{3,}$/.test(decodedText)) {
     showToast('Invalid QR: ' + decodedText, 'error');
     return;
@@ -693,6 +724,239 @@ async function submitBatch() {
     btn.textContent = batchAction === 'dispatch'
       ? 'Dispatch Selected Items' : 'Return Selected Items';
   }
+}
+
+// ==================== FORM UPLOAD MODE ====================
+
+function initUploadScanner() {
+  var container = document.getElementById('upload-scanner-container');
+  container.style.display = 'block';
+
+  uploadQrCode = new Html5Qrcode("upload-reader");
+  uploadQrCode.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
+    onUploadScanSuccess,
+    function() {}
+  ).catch(function(err) {
+    console.error('Upload scanner init failed:', err);
+    showToast('Camera access denied. Use manual entry below.', 'error');
+  });
+}
+
+function stopUploadScanner() {
+  if (uploadQrCode) {
+    try { uploadQrCode.stop(); } catch(e) {}
+    uploadQrCode = null;
+  }
+}
+
+function onUploadScanSuccess(decodedText) {
+  // Accept form number patterns
+  if (/^[BD]?[DR]F-/.test(decodedText)) {
+    uploadQrCode.pause();
+    if (navigator.vibrate) navigator.vibrate(200);
+    lookupForm(decodedText);
+    return;
+  }
+
+  // Also accept SAL-ID and redirect to single mode
+  if (/^SAL-\d{3,}$/.test(decodedText)) {
+    stopUploadScanner();
+    switchMode('single');
+    if (navigator.vibrate) navigator.vibrate(200);
+    lookupItem(decodedText);
+    return;
+  }
+
+  showToast('Not a form QR: ' + decodedText, 'error');
+}
+
+async function lookupForm(formNo) {
+  var detailsEl = document.getElementById('form-details');
+  detailsEl.style.display = 'block';
+  detailsEl.innerHTML = '<div class="loading">Looking up ' + formNo + '...</div>';
+  document.getElementById('upload-form').style.display = 'none';
+  document.getElementById('upload-form-id').value = formNo;
+
+  try {
+    var response = await fetch(
+      API_URL + '?action=formLookup&formNo=' + encodeURIComponent(formNo));
+    var data = await response.json();
+
+    if (data.error) {
+      showToast(data.error, 'error');
+      detailsEl.style.display = 'none';
+      if (uploadQrCode) { try { uploadQrCode.resume(); } catch(e) {} }
+      return;
+    }
+
+    currentFormData = data;
+    displayFormDetails(data);
+  } catch (err) {
+    showToast('Network error: ' + err.message, 'error');
+    detailsEl.style.display = 'none';
+    if (uploadQrCode) { try { uploadQrCode.resume(); } catch(e) {} }
+  }
+}
+
+function displayFormDetails(form) {
+  var typeBadge = form.type.indexOf('Dispatch') !== -1
+    ? '<span class="form-badge form-badge-dispatch">' + form.type + '</span>'
+    : '<span class="form-badge form-badge-return">' + form.type + '</span>';
+
+  var signedStatus = form.hasSignedForm
+    ? '<span class="status-badge signed-badge">Already uploaded</span>'
+    : '';
+
+  document.getElementById('form-details').innerHTML =
+    '<h3>Form Details ' + signedStatus + '</h3>' +
+    detail('Form No', '<strong>' + form.formNo + '</strong>') +
+    detail('Type', typeBadge) +
+    detail('SAL-ID(s)', form.salIds) +
+    detail('Area', form.area) +
+    detail('Items', form.items) +
+    detail('Qty', form.qty) +
+    detail('SAL Member', form.salMember) +
+    detail('Team Member', form.teamMember);
+
+  document.getElementById('form-details').style.display = 'block';
+  document.getElementById('upload-form').style.display = 'block';
+
+  // Stop the upload scanner since we found the form
+  stopUploadScanner();
+  document.getElementById('upload-scanner-container').style.display = 'none';
+
+  // Reset photo state
+  uploadPhotos = [];
+  renderPhotoPreview();
+  document.getElementById('upload-status').style.display = 'none';
+}
+
+function manualFormLookup() {
+  var input = document.getElementById('upload-form-id');
+  var formNo = input.value.trim();
+
+  if (!formNo) {
+    showToast('Enter a form number', 'error');
+    return;
+  }
+
+  if (uploadQrCode) { try { uploadQrCode.pause(); } catch(e) {} }
+  lookupForm(formNo);
+}
+
+function handlePhotoCapture(input) {
+  var files = input.files;
+  if (!files || !files.length) return;
+
+  for (var i = 0; i < files.length; i++) {
+    resizeImage(files[i], 1200).then(function(base64) {
+      uploadPhotos.push(base64);
+      renderPhotoPreview();
+    });
+  }
+
+  // Clear input so the same file can be selected again
+  input.value = '';
+}
+
+function resizeImage(file, maxWidth) {
+  return new Promise(function(resolve) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var scale = Math.min(1, maxWidth / img.width);
+        var canvas = document.createElement('canvas');
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderPhotoPreview() {
+  var container = document.getElementById('photo-preview');
+  var html = '';
+  for (var i = 0; i < uploadPhotos.length; i++) {
+    html += '<div class="photo-thumb">' +
+      '<img src="' + uploadPhotos[i] + '">' +
+      '<button class="remove-btn" onclick="removePhoto(' + i + ')">x</button>' +
+    '</div>';
+  }
+  container.innerHTML = html;
+}
+
+function removePhoto(index) {
+  uploadPhotos.splice(index, 1);
+  renderPhotoPreview();
+}
+
+async function submitSignedForm() {
+  if (!currentFormData) {
+    showToast('No form selected', 'error');
+    return;
+  }
+  if (uploadPhotos.length === 0) {
+    showToast('Please take at least one photo', 'error');
+    return;
+  }
+
+  var btn = document.getElementById('btn-upload');
+  var statusEl = document.getElementById('upload-status');
+  btn.disabled = true;
+  btn.textContent = 'Uploading ' + uploadPhotos.length + ' photo(s)...';
+  statusEl.textContent = 'Uploading...';
+  statusEl.style.display = 'block';
+
+  var sendTelegram = document.getElementById('upload-telegram').checked;
+
+  try {
+    var response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'uploadSignedForm',
+        formNo: currentFormData.formNo,
+        images: uploadPhotos,
+        sendTelegram: sendTelegram
+      }),
+      redirect: 'follow'
+    });
+    var data = await response.json();
+
+    if (data.error) {
+      showToast(data.error, 'error');
+      statusEl.textContent = 'Upload failed: ' + data.error;
+    } else {
+      showToast(data.message, 'success');
+      statusEl.innerHTML = 'Uploaded successfully! <a href="' + data.signedFormUrl +
+        '" target="_blank" style="color:#7c4dff">View in Drive</a>';
+    }
+  } catch (err) {
+    showToast('Network error: ' + err.message, 'error');
+    statusEl.textContent = 'Upload failed: ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Upload Signed Form';
+  }
+}
+
+function resetUploadMode() {
+  currentFormData = null;
+  uploadPhotos = [];
+  document.getElementById('form-details').style.display = 'none';
+  document.getElementById('upload-form').style.display = 'none';
+  document.getElementById('upload-form-id').value = '';
+  document.getElementById('upload-status').style.display = 'none';
+  renderPhotoPreview();
+  // Restart scanner
+  initUploadScanner();
 }
 
 // ==================== UI HELPERS ====================

@@ -171,6 +171,56 @@
     }
     .qty-headers span:first-child { width: 50px; text-align: center; }
     .qty-headers span:last-child { width: 44px; text-align: center; }
+
+    /* Form Upload mode */
+    .btn-upload { background: #7c4dff; color: white; }
+    .photo-preview {
+      display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0;
+    }
+    .photo-thumb {
+      position: relative; width: 80px; height: 80px;
+      border-radius: 8px; overflow: hidden; border: 2px solid #ddd;
+    }
+    .photo-thumb img {
+      width: 100%; height: 100%; object-fit: cover;
+    }
+    .photo-thumb .remove-btn {
+      position: absolute; top: 2px; right: 2px;
+      background: #d93025; color: white; border: none;
+      border-radius: 50%; width: 20px; height: 20px;
+      font-size: 12px; cursor: pointer; line-height: 20px;
+      text-align: center; padding: 0;
+    }
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 0;
+    }
+    .toggle-row label { font-size: 14px; font-weight: 600; color: #333; }
+    .toggle-switch {
+      position: relative; width: 48px; height: 26px;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-switch .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background: #ccc; border-radius: 26px; transition: 0.3s;
+    }
+    .toggle-switch .slider:before {
+      content: ""; position: absolute; height: 20px; width: 20px;
+      left: 3px; bottom: 3px; background: white;
+      border-radius: 50%; transition: 0.3s;
+    }
+    .toggle-switch input:checked + .slider { background: #7c4dff; }
+    .toggle-switch input:checked + .slider:before { transform: translateX(22px); }
+    .upload-status {
+      text-align: center; padding: 12px; font-size: 14px; color: #666;
+    }
+    .form-badge {
+      display: inline-block; padding: 4px 10px; border-radius: 4px;
+      font-size: 12px; font-weight: 600; text-transform: uppercase;
+    }
+    .form-badge-dispatch { background: #e8f0fe; color: #1a73e8; }
+    .form-badge-return { background: #e6f4ea; color: #34a853; }
+    .signed-badge { background: #fce8e6; color: #d93025; font-size: 11px; margin-left: 6px; }
   </style>
 </head>
 <body>
@@ -184,6 +234,8 @@
             onclick="switchMode('single')">Single</button>
     <button class="mode-btn" id="mode-batch"
             onclick="switchMode('batch')">Batch</button>
+    <button class="mode-btn" id="mode-upload"
+            onclick="switchMode('upload')">Form Upload</button>
   </div>
 
   <!-- ==================== SINGLE MODE ==================== -->
@@ -304,6 +356,54 @@
       <button class="btn" id="btn-batch-submit" onclick="submitBatch()">
         Dispatch Selected Items
       </button>
+    </div>
+  </div>
+
+  <!-- ==================== FORM UPLOAD MODE ==================== -->
+  <div id="upload-mode" style="display:none">
+
+    <!-- Scanner for form QR -->
+    <div id="upload-scanner-container">
+      <div id="upload-reader" style="width:100%; height:300px; background:#000"></div>
+    </div>
+
+    <div class="manual-entry">
+      <input type="text" id="upload-form-id" placeholder="Form No (e.g. DF-20260225-143025)"
+             onkeydown="if(event.key==='Enter')manualFormLookup()">
+      <button onclick="manualFormLookup()">Lookup</button>
+    </div>
+
+    <!-- Form details (shown after lookup) -->
+    <div id="form-details" class="section" style="display:none"></div>
+
+    <!-- Photo capture + upload -->
+    <div id="upload-form" class="section" style="display:none">
+      <h3>Upload Signed Form</h3>
+
+      <div class="form-group">
+        <label>Take or Select Photos</label>
+        <input type="file" id="photo-input" accept="image/*" capture="environment"
+               multiple onchange="handlePhotoCapture(this)">
+      </div>
+
+      <div id="photo-preview" class="photo-preview"></div>
+
+      <div class="toggle-row">
+        <label>Send to Telegram</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="upload-telegram" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <button class="btn btn-upload" id="btn-upload" onclick="submitSignedForm()">
+        Upload Signed Form
+      </button>
+
+      <div id="upload-status" class="upload-status" style="display:none"></div>
+
+      <button class="btn btn-secondary" onclick="resetUploadMode()"
+              style="margin-top:8px">Scan Another Form</button>
     </div>
   </div>
 
