@@ -10,7 +10,7 @@
  *                 upload to Drive. Auto-detects form QR codes from any mode.
  *
  * Authentication:
- *   Uses Google Sign-In + backend session tokens (10-hour expiry).
+ *   Uses Google OAuth redirect flow + backend session tokens (10-hour expiry).
  *   Configure GOOGLE_CLIENT_ID and AUTHORIZED_USERS in Config.gs.
  *
  * IMPORTANT: Replace API_URL below with your
@@ -45,12 +45,63 @@ var currentFormData = null;    // Form details from lookup
 
 // ==================== AUTHENTICATION ====================
 
+var GOOGLE_CLIENT_ID = '17051827194-rjmdspbl26fnpgqamp40lpsf77l2tqro.apps.googleusercontent.com';
+
 /**
- * Google Sign-In callback (called by GIS library after user signs in).
- * Sends the 1-hour Google token to the backend to get a 10-hour session token.
+ * Starts Google Sign-In via OAuth redirect (avoids COOP popup issues on GitHub Pages).
+ * Redirects to Google, which redirects back with id_token in the URL hash.
  */
-async function onGoogleSignIn(response) {
-  var googleToken = response.credential;
+function startGoogleSignIn() {
+  var nonce = generateNonce_();
+  sessionStorage.setItem('sal-auth-nonce', nonce);
+
+  var redirectUri = window.location.origin + window.location.pathname;
+  var authUrl = 'https://accounts.google.com/o/oauth2/v2/auth' +
+    '?client_id=' + encodeURIComponent(GOOGLE_CLIENT_ID) +
+    '&redirect_uri=' + encodeURIComponent(redirectUri) +
+    '&response_type=id_token' +
+    '&scope=openid%20email%20profile' +
+    '&nonce=' + encodeURIComponent(nonce) +
+    '&prompt=select_account';
+
+  window.location.href = authUrl;
+}
+
+function generateNonce_() {
+  var arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+}
+
+/**
+ * Checks if page was loaded via OAuth redirect (id_token in URL hash).
+ * If so, exchanges the token for a backend session.
+ */
+function handleAuthRedirect() {
+  var hash = window.location.hash;
+  if (!hash || hash.indexOf('id_token') === -1) return false;
+
+  // Parse hash fragment: #id_token=xxx&token_type=Bearer&...
+  var params = {};
+  hash.substring(1).split('&').forEach(function(part) {
+    var eq = part.indexOf('=');
+    if (eq > -1) params[decodeURIComponent(part.substring(0, eq))] = decodeURIComponent(part.substring(eq + 1));
+  });
+
+  if (!params.id_token) return false;
+
+  // Clear the hash from URL so it doesn't persist on refresh
+  history.replaceState(null, '', window.location.pathname);
+
+  // Exchange the Google ID token for a backend session
+  exchangeGoogleToken(params.id_token);
+  return true;
+}
+
+/**
+ * Sends a Google ID token to the backend to get a 10-hour session token.
+ */
+async function exchangeGoogleToken(googleToken) {
   var loginError = document.getElementById('login-error');
   loginError.style.display = 'none';
 
@@ -73,6 +124,7 @@ async function onGoogleSignIn(response) {
     var data = await res.json();
 
     if (data.error) {
+      console.error('[AUTH] Backend error:', data.error);
       loginError.textContent = data.error;
       loginError.style.display = 'block';
       authUser = null;
@@ -88,6 +140,7 @@ async function onGoogleSignIn(response) {
 
     showApp();
   } catch (err) {
+    console.error('[AUTH] Network/fetch error:', err);
     loginError.textContent = 'Network error: ' + err.message;
     loginError.style.display = 'block';
     authUser = null;
@@ -120,11 +173,6 @@ function signOut() {
   authUser = null;
   localStorage.removeItem('sal-session-token');
   localStorage.removeItem('sal-auth-user');
-
-  // Revoke Google auto-select
-  if (typeof google !== 'undefined' && google.accounts && google.accounts.id) {
-    google.accounts.id.disableAutoSelect();
-  }
 
   // Stop all scanners
   if (html5QrCode) { try { html5QrCode.stop(); } catch(e) {} }
@@ -1101,10 +1149,12 @@ function showToast(message, type) {
 // ==================== INIT ====================
 
 document.addEventListener('DOMContentLoaded', function() {
+  // Check if returning from Google OAuth redirect (id_token in hash)
+  if (handleAuthRedirect()) return;
+
   // Check for existing session (page reload, return visit)
   if (!checkExistingSession()) {
     // No valid session — login screen is already visible
-    // GIS library will render the "Sign in with Google" button
     // initScanner() will be called by showApp() after successful sign-in
   }
 });
