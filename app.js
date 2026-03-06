@@ -9,6 +9,10 @@
  *   Form Upload - Scan a form QR code, take photos of the signed form,
  *                 upload to Drive. Auto-detects form QR codes from any mode.
  *
+ * Authentication:
+ *   Uses Google Sign-In + backend session tokens (10-hour expiry).
+ *   Configure GOOGLE_CLIENT_ID and AUTHORIZED_USERS in Config.gs.
+ *
  * IMPORTANT: Replace API_URL below with your
  * Apps Script Web App URL after deployment.
  *
@@ -20,6 +24,10 @@
  ***********************/
 
 var API_URL = 'https://script.google.com/macros/s/AKfycbz32wILXpjtk61orzZLIT6eCBMWwp_UXjVsAWcGBtCV2jMaChcNIRPxW8LdN0wx2vBITA/exec';
+
+// --- AUTH STATE ---
+var sessionToken = null;       // Backend session token (10-hour, from createSession)
+var authUser = null;           // { email, name } from Google profile
 
 // --- STATE ---
 var html5QrCode = null;       // Single-mode scanner
@@ -34,6 +42,154 @@ var areasLoaded = false;       // Whether area dropdown has been populated
 var uploadQrCode = null;       // Upload-mode scanner
 var uploadPhotos = [];         // Base64 images pending upload
 var currentFormData = null;    // Form details from lookup
+
+// ==================== AUTHENTICATION ====================
+
+/**
+ * Google Sign-In callback (called by GIS library after user signs in).
+ * Sends the 1-hour Google token to the backend to get a 10-hour session token.
+ */
+async function onGoogleSignIn(response) {
+  var googleToken = response.credential;
+  var loginError = document.getElementById('login-error');
+  loginError.style.display = 'none';
+
+  // Decode JWT payload to get user info for display
+  try {
+    var payload = JSON.parse(atob(googleToken.split('.')[1]));
+    authUser = { email: payload.email, name: payload.name || payload.email };
+  } catch (e) {
+    authUser = { email: 'unknown', name: 'Unknown' };
+  }
+
+  // Exchange Google token for a long-lived session token from the backend
+  try {
+    var res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'createSession', googleToken: googleToken }),
+      redirect: 'follow'
+    });
+    var data = await res.json();
+
+    if (data.error) {
+      loginError.textContent = data.error;
+      loginError.style.display = 'block';
+      authUser = null;
+      return;
+    }
+
+    sessionToken = data.session;
+    authUser = { email: data.email, name: data.name };
+
+    // Store in localStorage (survives tab close — lasts until session expires server-side)
+    localStorage.setItem('sal-session-token', sessionToken);
+    localStorage.setItem('sal-auth-user', JSON.stringify(authUser));
+
+    showApp();
+  } catch (err) {
+    loginError.textContent = 'Network error: ' + err.message;
+    loginError.style.display = 'block';
+    authUser = null;
+  }
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('main-app').style.display = 'block';
+
+  // Show user email in header
+  if (authUser) {
+    document.getElementById('user-info').textContent = authUser.email;
+  }
+
+  // Auto-populate SAL team member name from Google profile
+  var salNameField = document.getElementById('f-sal-name');
+  var batchSalNameField = document.getElementById('batch-sal-name');
+  if (authUser && authUser.name) {
+    if (!salNameField.value) salNameField.value = authUser.name;
+    if (!batchSalNameField.value) batchSalNameField.value = authUser.name;
+    localStorage.setItem('sal-team-member', authUser.name);
+  }
+
+  initScanner();
+}
+
+function signOut() {
+  sessionToken = null;
+  authUser = null;
+  localStorage.removeItem('sal-session-token');
+  localStorage.removeItem('sal-auth-user');
+
+  // Revoke Google auto-select
+  if (typeof google !== 'undefined' && google.accounts && google.accounts.id) {
+    google.accounts.id.disableAutoSelect();
+  }
+
+  // Stop all scanners
+  if (html5QrCode) { try { html5QrCode.stop(); } catch(e) {} }
+  stopBatchScanner();
+  stopUploadScanner();
+
+  // Show login, hide app
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('main-app').style.display = 'none';
+}
+
+function checkExistingSession() {
+  var saved = localStorage.getItem('sal-session-token');
+  var savedUser = localStorage.getItem('sal-auth-user');
+
+  if (saved && savedUser) {
+    sessionToken = saved;
+    authUser = JSON.parse(savedUser);
+    showApp();
+    return true;
+  }
+  return false;
+}
+
+// ==================== API HELPERS ====================
+
+/**
+ * GET request with session token appended as query param.
+ * Auto-signs out if session is expired.
+ */
+function apiGet(params) {
+  var url = API_URL + '?' + params;
+  if (sessionToken) {
+    url += '&session=' + encodeURIComponent(sessionToken);
+  }
+  return fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.error && data.error.indexOf('sign in') !== -1) {
+      signOut();
+      throw new Error(data.error);
+    }
+    return data;
+  });
+}
+
+/**
+ * POST request with session token in JSON body (keeps Content-Type: text/plain for CORS).
+ * Auto-signs out if session is expired.
+ */
+function apiPost(body) {
+  if (sessionToken) {
+    body.session = sessionToken;
+  }
+  return fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body),
+    redirect: 'follow'
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.error && data.error.indexOf('sign in') !== -1) {
+      signOut();
+      throw new Error(data.error);
+    }
+    return data;
+  });
+}
 
 // ==================== SCANNER ====================
 
@@ -79,9 +235,7 @@ async function lookupItem(salId) {
   document.getElementById('action-form').style.display = 'none';
 
   try {
-    var response = await fetch(
-      API_URL + '?action=lookup&id=' + encodeURIComponent(salId));
-    var data = await response.json();
+    var data = await apiGet('action=lookup&id=' + encodeURIComponent(salId));
 
     if (data.error) {
       showToast(data.error, 'error');
@@ -226,15 +380,7 @@ async function submitAction() {
   }
 
   try {
-    // Use text/plain to avoid CORS preflight (OPTIONS) which Apps Script doesn't handle.
-    // Apps Script still receives the JSON body correctly via e.postData.contents.
-    var response = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(body),
-      redirect: 'follow'
-    });
-    var data = await response.json();
+    var data = await apiPost(body);
 
     if (data.error) {
       showToast(data.error, 'error');
@@ -380,8 +526,7 @@ function setBatchAction(action) {
 async function loadAreaDropdown() {
   var select = document.getElementById('batch-area');
   try {
-    var response = await fetch(API_URL + '?action=areas');
-    var data = await response.json();
+    var data = await apiGet('action=areas');
     if (data.areas) {
       data.areas.sort();
       for (var i = 0; i < data.areas.length; i++) {
@@ -417,9 +562,7 @@ async function loadBatchItems() {
   section.style.display = 'block';
 
   try {
-    var response = await fetch(
-      API_URL + '?action=areaItems&area=' + encodeURIComponent(area));
-    var data = await response.json();
+    var data = await apiGet('action=areaItems&area=' + encodeURIComponent(area));
 
     if (!data.items || data.items.length === 0) {
       listDiv.innerHTML = '<p style="color:#666;text-align:center">No items found for this area.</p>';
@@ -693,19 +836,13 @@ async function submitBatch() {
   var postAction = batchAction === 'dispatch' ? 'bulkDispatch' : 'bulkReturn';
 
   try {
-    var response = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: postAction,
-        salTeamMember: salName,
-        teamMember: teamName,
-        notes: notes,
-        items: selectedItems
-      }),
-      redirect: 'follow'
+    var data = await apiPost({
+      action: postAction,
+      salTeamMember: salName,
+      teamMember: teamName,
+      notes: notes,
+      items: selectedItems
     });
-    var data = await response.json();
 
     if (data.error) {
       showToast(data.error, 'error');
@@ -780,9 +917,7 @@ async function lookupForm(formNo) {
   document.getElementById('upload-form-id').value = formNo;
 
   try {
-    var response = await fetch(
-      API_URL + '?action=formLookup&formNo=' + encodeURIComponent(formNo));
-    var data = await response.json();
+    var data = await apiGet('action=formLookup&formNo=' + encodeURIComponent(formNo));
 
     if (data.error) {
       showToast(data.error, 'error');
@@ -917,18 +1052,12 @@ async function submitSignedForm() {
   var sendTelegram = document.getElementById('upload-telegram').checked;
 
   try {
-    var response = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: 'uploadSignedForm',
-        formNo: currentFormData.formNo,
-        images: uploadPhotos,
-        sendTelegram: sendTelegram
-      }),
-      redirect: 'follow'
+    var data = await apiPost({
+      action: 'uploadSignedForm',
+      formNo: currentFormData.formNo,
+      images: uploadPhotos,
+      sendTelegram: sendTelegram
     });
-    var data = await response.json();
 
     if (data.error) {
       showToast(data.error, 'error');
@@ -971,4 +1100,11 @@ function showToast(message, type) {
 
 // ==================== INIT ====================
 
-document.addEventListener('DOMContentLoaded', initScanner);
+document.addEventListener('DOMContentLoaded', function() {
+  // Check for existing session (page reload, return visit)
+  if (!checkExistingSession()) {
+    // No valid session — login screen is already visible
+    // GIS library will render the "Sign in with Google" button
+    // initScanner() will be called by showApp() after successful sign-in
+  }
+});

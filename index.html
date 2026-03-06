@@ -221,12 +221,65 @@
     .form-badge-dispatch { background: #e8f0fe; color: #1a73e8; }
     .form-badge-return { background: #e6f4ea; color: #34a853; }
     .signed-badge { background: #fce8e6; color: #d93025; font-size: 11px; margin-left: 6px; }
+
+    /* Login screen */
+    #login-screen {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 100vh; padding: 20px;
+      text-align: center; background: #f5f5f5;
+    }
+    #login-screen h1 { font-size: 22px; color: #1a73e8; margin-bottom: 4px; }
+    #login-screen .subtitle { color: #666; font-size: 14px; margin-bottom: 32px; }
+    #login-error { color: #d93025; font-size: 13px; margin-top: 16px; display: none; }
+
+    /* Sign-out button in header */
+    .header-inner {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .header-spacer { width: 60px; }
+    .header-title { text-align: center; flex: 1; }
+    .btn-signout {
+      background: none; border: 1px solid rgba(255,255,255,0.5);
+      color: white; padding: 4px 10px; border-radius: 4px;
+      font-size: 12px; cursor: pointer; white-space: nowrap;
+    }
+    .user-info { font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 2px; }
   </style>
 </head>
 <body>
+  <!-- LOGIN SCREEN (shown until authenticated) -->
+  <div id="login-screen">
+    <div style="font-size:48px; margin-bottom:16px">&#x1F4E6;</div>
+    <h1>SAL Scanner</h1>
+    <p class="subtitle">MEL Tour 2026</p>
+    <div id="g_id_onload"
+         data-client_id="17051827194-rjmdspbl26fnpgqamp40lpsf77l2tqro.apps.googleusercontent.com"
+         data-callback="onGoogleSignIn"
+         data-auto_prompt="false">
+    </div>
+    <div class="g_id_signin"
+         data-type="standard"
+         data-size="large"
+         data-theme="outline"
+         data-text="sign_in_with"
+         data-shape="rectangular"
+         data-logo_alignment="left">
+    </div>
+    <p id="login-error"></p>
+  </div>
+
+  <!-- MAIN APP (hidden until authenticated) -->
+  <div id="main-app" style="display:none">
   <div class="header">
-    SAL Scanner
-    <small>MEL Tour 2026</small>
+    <div class="header-inner">
+      <div class="header-spacer"></div>
+      <div class="header-title">
+        SAL Scanner
+        <small>MEL Tour 2026</small>
+        <div class="user-info" id="user-info"></div>
+      </div>
+      <button class="btn-signout" onclick="signOut()">Sign Out</button>
+    </div>
   </div>
 
   <div class="mode-toggle">
@@ -409,6 +462,9 @@
 
   <div id="toast" class="toast"></div>
 
+  </div><!-- /main-app -->
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="app.js"></script>
 </body>
