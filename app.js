@@ -1153,8 +1153,19 @@ document.addEventListener('DOMContentLoaded', function() {
   if (handleAuthRedirect()) return;
 
   // Check for existing session (page reload, return visit)
-  if (!checkExistingSession()) {
-    // No valid session — login screen is already visible
-    // initScanner() will be called by showApp() after successful sign-in
-  }
+  if (checkExistingSession()) return;
+
+  // No saved session — ask the backend if auth is enabled
+  fetch(API_URL + '?action=ping')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok && !data.authEnabled) {
+        // Auth is disabled — skip login, go straight to app
+        showApp();
+      }
+      // Otherwise login screen stays visible, waiting for Google Sign-In
+    })
+    .catch(function() {
+      // Network error — show login screen anyway (fail safe)
+    });
 });
