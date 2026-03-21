@@ -1155,17 +1155,21 @@ document.addEventListener('DOMContentLoaded', function() {
   // Check for existing session (page reload, return visit)
   if (checkExistingSession()) return;
 
-  // No saved session — ask the backend if auth is enabled
+  // No saved session — ask the backend if auth is enabled before showing anything
   fetch(API_URL + '?action=ping')
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.ok && !data.authEnabled) {
-        // Auth is disabled — skip login, go straight to app
+        // Auth is disabled — skip login, go straight to app, hide sign-out
+        document.getElementById('btn-signout').style.display = 'none';
         showApp();
+      } else {
+        // Auth is enabled — show login screen
+        document.getElementById('login-screen').style.display = 'flex';
       }
-      // Otherwise login screen stays visible, waiting for Google Sign-In
     })
     .catch(function() {
-      // Network error — show login screen anyway (fail safe)
+      // Network error — show login screen as fallback
+      document.getElementById('login-screen').style.display = 'flex';
     });
 });

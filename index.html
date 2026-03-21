@@ -259,8 +259,8 @@
   </style>
 </head>
 <body>
-  <!-- LOGIN SCREEN (shown until authenticated) -->
-  <div id="login-screen">
+  <!-- LOGIN SCREEN (hidden by default, shown only if auth is enabled) -->
+  <div id="login-screen" style="display:none">
     <div style="font-size:48px; margin-bottom:16px">&#x1F4E6;</div>
     <h1>SAL Scanner</h1>
     <p class="subtitle">MEL Tour 2026</p>
@@ -281,7 +281,7 @@
         <small>MEL Tour 2026</small>
         <div class="user-info" id="user-info"></div>
       </div>
-      <button class="btn-signout" onclick="signOut()">Sign Out</button>
+      <button id="btn-signout" class="btn-signout" onclick="signOut()">Sign Out</button>
     </div>
   </div>
 
