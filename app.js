@@ -642,8 +642,8 @@ async function loadBatchItems() {
           });
         }
       } else {
-        // Show items that are outstanding (dispatched but not returned)
-        if (it.outstanding > 0) {
+        // Show items that are outstanding (dispatched but not returned) and marked for return
+        if (it.outstanding > 0 && String(it.returnToSal).trim().toUpperCase() !== 'NO' && String(it.returnToSal).trim() !== 'N') {
           batchItemsData.push({
             salId: it.salId,
             item: it.item,
